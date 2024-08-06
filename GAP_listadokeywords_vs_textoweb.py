@@ -1,21 +1,12 @@
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-import datetime
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-
-
-# IVÁN revisar si necesita INTALAR PAQUETES, COMANDO: pip install pandas openpyxl
-
+import datetime
 
 # Configuración de autenticación y conexión con GSC
 CREDENTIALS_FILE = '/Users/ivangarcia/Desktop/pruebascriptgsc-7766cf0aaf44.json'
-SHEET_CREDENTIALS_FILE = '/Users/ivangarcia/Desktop/pruebascriptgsc-a2defdcf30d2.json'
-
-# URL de tu propiedad en Google Search Console
 SITE_URL = 'sc-domain:modelosyformularios.es'
 
 # Autenticación de la cuenta de GSC
@@ -27,11 +18,12 @@ credentials = service_account.Credentials.from_service_account_file(
 # Construcción del cliente de la API de Google Search Console
 service = build('searchconsole', 'v1', credentials=credentials)
 
-# Especificar el rango de fechas para la consulta (últimos 28 días en este ejemplo)
+# Definir el rango de fechas y la URL a procesar
 end_date = datetime.date.today()
 start_date = end_date - datetime.timedelta(days=28)
+target_url = 'https://modelosyformularios.es/modelos/modelo-002/'
 
-# Consultar los datos de rendimiento para la URL especificada
+# Configurar la solicitud a la API de GSC
 request = {
     'startDate': start_date.isoformat(),
     'endDate': end_date.isoformat(),
@@ -42,11 +34,12 @@ request = {
         'filters': [{
             'dimension': 'page',
             'operator': 'contains',
-            'expression': 'https://modelosyformularios.es/modelos/modelo-002/'
+            'expression': target_url
         }]
     }]
 }
 
+# Consultar los datos de rendimiento para la URL especificada
 response = service.searchanalytics().query(siteUrl=SITE_URL, body=request).execute()
 
 # Extraer las palabras clave (queries), impresiones y clics de la respuesta de GSC
@@ -90,7 +83,7 @@ def check_keywords_in_content(content, keywords_data):
 def parse_content(url, content):
     soup = BeautifulSoup(content, 'html.parser')
     relevant_text = ""
-    target_div = soup.find('div', class_='c-description-block__container container-fluid u-max-width')
+    target_div = soup.find('div', class_='entry-content clear')
     if target_div:
         relevant_text += target_div.get_text(separator=' ')
     else:
@@ -104,7 +97,7 @@ def parse_content(url, content):
     
     return relevant_text
 
-# Procesar una URL específica y hacer match de palabras clave con su contenido
+# Procesar la URL y guardar los resultados
 def process_url(url, keywords_data):
     content = fetch_url_content(url)
     if content:
@@ -113,9 +106,8 @@ def process_url(url, keywords_data):
     else:
         return None
 
-# Procesar la URL con las palabras clave obtenidas de GSC
+# Main execution
 if __name__ == "__main__":
-    target_url = 'https://modelosyformularios.es/modelos/modelo-002/'  # Cambia esto según tus necesidades
     result = process_url(target_url, keywords_data)
     
     # Preparar los datos para la exportación
@@ -134,23 +126,24 @@ if __name__ == "__main__":
     results_df = pd.DataFrame(export_data)
     
     # Exportar a CSV
-    output_file = '/Users/ivangarcia/Downloads/results.csv'
-    results_df.to_csv(output_file, index=False)
+    output_file = '/Users/ivangarcia/Downloads/results.xlsx'
+    results_df.to_excel(output_file, index=False)
     print(f"Results have been exported to {output_file}")
     
-    # Leer el CSV y realizar los cálculos
-    df = pd.read_csv(output_file)
+    # Leer el archivo Excel y realizar cálculos
+    df = pd.read_excel(output_file)
+    
+    # Cálculos de métricas
+    summary_df = df.groupby('URL').agg({
+        'Planteada': ['sum', lambda x: (~x).sum()],
+        'Impressions': lambda x: x[df['Planteada'] == False].sum(),
+        'Clicks': lambda x: x[df['Planteada'] == False].sum()
+    }).reset_index()
 
-    # Calculos de métricas
-    summary_df = df.groupby('URL').apply(lambda x: pd.Series({
-        'Count_False_KW': (x['Planteada'] == False).sum(),
-        'Count_True_KW': (x['Planteada'] == True).sum(),
-        'Sum_Impressions_False_KW': x.loc[x['Planteada'] == False, 'Impressions'].sum(),
-        'Sum_Clicks_False_KW': x.loc[x['Planteada'] == False, 'Clicks'].sum()
-    })).reset_index()
-
-    # Guardar el resumen en una NUEVA HOJA 'SUMMARY' del CSV
-    with pd.ExcelWriter(output_file, mode='a', if_sheet_exists='new') as writer:
+    summary_df.columns = ['URL', 'Count_True_KW', 'Count_False_KW', 'Sum_Impressions_False_KW', 'Sum_Clicks_False_KW']
+    
+    # Guardar el resumen en una NUEVA HOJA 'SUMMARY' del archivo Excel
+    with pd.ExcelWriter(output_file, mode='a', engine='openpyxl', if_sheet_exists='new') as writer:
         summary_df.to_excel(writer, sheet_name='Summary', index=False)
     
     print(f"Summary has been added to a new sheet in {output_file}")
